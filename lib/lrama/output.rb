@@ -4,11 +4,11 @@ require "forwardable"
 require_relative "tracer/duration"
 
 module Lrama
-  class Output
+  class OutputBase
     extend Forwardable
     include Tracer::Duration
 
-    attr_reader :grammar_file_path, :context, :grammar, :error_recovery, :include_header
+    attr_reader :grammar_file_path, :context, :grammar, :error_recovery, :include_header, :template_name
 
     def_delegators "@context", :yyfinal, :yylast, :yyntokens, :yynnts, :yynrules, :yynstates,
                                :yymaxutok, :yypact_ninf, :yytable_ninf
@@ -125,138 +125,45 @@ module Lrama
     end
 
     def symbol_actions_for_printer
-      @grammar.symbols.map do |sym|
-        next unless sym.printer
-
-        <<-STR
-    case #{sym.enum_name}: /* #{sym.comment}  */
-#line #{sym.printer.lineno} "#{@grammar_file_path}"
-         {#{sym.printer.translated_code(sym.tag)}}
-#line [@oline@] [@ofile@]
-        break;
-
-        STR
-      end.join
+      raise NotImplementedError, "Subclasses must implement symbol_actions_for_printer"
     end
 
     def symbol_actions_for_destructor
-      @grammar.symbols.map do |sym|
-        next unless sym.destructor
+      raise NotImplementedError, "Subclasses must implement symbol_actions_for_destructor"
+    end
 
-        <<-STR
-    case #{sym.enum_name}: /* #{sym.comment}  */
-#line #{sym.destructor.lineno} "#{@grammar_file_path}"
-         {#{sym.destructor.translated_code(sym.tag)}}
-#line [@oline@] [@ofile@]
-        break;
-
-        STR
-      end.join
+    def symbol_actions_for_error_token
+      raise NotImplementedError, "Subclasses must implement symbol_actions_for_error_token"
     end
 
     # b4_user_initial_action
     def user_initial_action(comment = "")
-      return "" unless @grammar.initial_action
-
-      <<-STR
-        #{comment}
-#line #{@grammar.initial_action.line} "#{@grammar_file_path}"
-        {#{@grammar.initial_action.translated_code}}
-      STR
+      raise NotImplementedError, "Subclasses must implement user_initial_action"
     end
 
     def after_shift_function(comment = "")
-      return "" unless @grammar.after_shift
-
-      <<-STR
-        #{comment}
-#line #{@grammar.after_shift.line} "#{@grammar_file_path}"
-        {#{@grammar.after_shift.s_value}(#{parse_param_name});}
-#line [@oline@] [@ofile@]
-      STR
+      raise NotImplementedError, "Subclasses must implement after_shift_function"
     end
 
     def before_reduce_function(comment = "")
-      return "" unless @grammar.before_reduce
-
-      <<-STR
-        #{comment}
-#line #{@grammar.before_reduce.line} "#{@grammar_file_path}"
-        {#{@grammar.before_reduce.s_value}(yylen#{user_args});}
-#line [@oline@] [@ofile@]
-      STR
+      raise NotImplementedError, "Subclasses must implement before_reduce_function"
     end
 
     def after_reduce_function(comment = "")
-      return "" unless @grammar.after_reduce
-
-      <<-STR
-        #{comment}
-#line #{@grammar.after_reduce.line} "#{@grammar_file_path}"
-        {#{@grammar.after_reduce.s_value}(yylen#{user_args});}
-#line [@oline@] [@ofile@]
-      STR
+      raise NotImplementedError, "Subclasses must implement after_reduce_function"
     end
 
     def after_shift_error_token_function(comment = "")
-      return "" unless @grammar.after_shift_error_token
-
-      <<-STR
-        #{comment}
-#line #{@grammar.after_shift_error_token.line} "#{@grammar_file_path}"
-        {#{@grammar.after_shift_error_token.s_value}(#{parse_param_name});}
-#line [@oline@] [@ofile@]
-      STR
+      raise NotImplementedError, "Subclasses must implement after_shift_error_token_function"
     end
 
     def after_pop_stack_function(len, comment = "")
-      return "" unless @grammar.after_pop_stack
-
-      <<-STR
-        #{comment}
-#line #{@grammar.after_pop_stack.line} "#{@grammar_file_path}"
-        {#{@grammar.after_pop_stack.s_value}(#{len}#{user_args});}
-#line [@oline@] [@ofile@]
-      STR
-    end
-
-    def symbol_actions_for_error_token
-      @grammar.symbols.map do |sym|
-        next unless sym.error_token
-
-        <<-STR
-    case #{sym.enum_name}: /* #{sym.comment}  */
-#line #{sym.error_token.lineno} "#{@grammar_file_path}"
-         {#{sym.error_token.translated_code(sym.tag)}}
-#line [@oline@] [@ofile@]
-        break;
-
-        STR
-      end.join
+      raise NotImplementedError, "Subclasses must implement after_pop_stack_function"
     end
 
     # b4_user_actions
     def user_actions
-      action = @context.states.rules.map do |rule|
-        next unless rule.token_code
-
-        code = rule.token_code
-        spaces = " " * (code.column - 1)
-
-        <<-STR
-  case #{rule.id + 1}: /* #{rule.as_comment}  */
-#line #{code.line} "#{@grammar_file_path}"
-#{spaces}{#{rule.translated_code}}
-#line [@oline@] [@ofile@]
-    break;
-
-        STR
-      end.join
-
-      action + <<-STR
-
-#line [@oline@] [@ofile@]
-      STR
+      raise NotImplementedError, "Subclasses must implement user_actions"
     end
 
     def omit_blanks(param)
@@ -447,6 +354,262 @@ module Lrama
         line.gsub!("[@ofile@]", "\"#{ofile}\"")
         line
       end.join
+    end
+  end
+
+  class COutput < OutputBase
+    # b4_user_actions
+    def user_actions
+      action = @context.states.rules.map do |rule|
+        next unless rule.token_code
+
+        code = rule.token_code
+        spaces = " " * (code.column - 1)
+
+        <<-STR
+  case #{rule.id + 1}: /* #{rule.as_comment}  */
+#line #{code.line} "#{@grammar_file_path}"
+#{spaces}{#{rule.translated_code}}
+#line [@oline@] [@ofile@]
+    break;
+
+        STR
+      end.join
+
+      action + <<-STR
+
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def symbol_actions_for_printer
+      @grammar.symbols.map do |sym|
+        next unless sym.printer
+
+        <<-STR
+    case #{sym.enum_name}: /* #{sym.comment}  */
+#line #{sym.printer.lineno} "#{@grammar_file_path}"
+         {#{sym.printer.translated_code(sym.tag)}}
+#line [@oline@] [@ofile@]
+        break;
+
+        STR
+      end.join
+    end
+
+    def symbol_actions_for_destructor
+      @grammar.symbols.map do |sym|
+        next unless sym.destructor
+
+        <<-STR
+    case #{sym.enum_name}: /* #{sym.comment}  */
+#line #{sym.destructor.lineno} "#{@grammar_file_path}"
+         {#{sym.destructor.translated_code(sym.tag)}}
+#line [@oline@] [@ofile@]
+        break;
+
+        STR
+      end.join
+    end
+
+    def symbol_actions_for_error_token
+      @grammar.symbols.map do |sym|
+        next unless sym.error_token
+
+        <<-STR
+    case #{sym.enum_name}: /* #{sym.comment}  */
+#line #{sym.error_token.lineno} "#{@grammar_file_path}"
+         {#{sym.error_token.translated_code(sym.tag)}}
+#line [@oline@] [@ofile@]
+        break;
+
+        STR
+      end.join
+    end
+
+    # b4_user_initial_action
+    def user_initial_action(comment = "")
+      return "" unless @grammar.initial_action
+
+      <<-STR
+        #{comment}
+#line #{@grammar.initial_action.line} "#{@grammar_file_path}"
+        {#{@grammar.initial_action.translated_code}}
+      STR
+    end
+
+    def after_shift_function(comment = "")
+      return "" unless @grammar.after_shift
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_shift.line} "#{@grammar_file_path}"
+        {#{@grammar.after_shift.s_value}(#{parse_param_name});}
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def before_reduce_function(comment = "")
+      return "" unless @grammar.before_reduce
+
+      <<-STR
+        #{comment}
+#line #{@grammar.before_reduce.line} "#{@grammar_file_path}"
+        {#{@grammar.before_reduce.s_value}(yylen#{user_args});}
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def after_reduce_function(comment = "")
+      return "" unless @grammar.after_reduce
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_reduce.line} "#{@grammar_file_path}"
+        {#{@grammar.after_reduce.s_value}(yylen#{user_args});}
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def after_shift_error_token_function(comment = "")
+      return "" unless @grammar.after_shift_error_token
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_shift_error_token.line} "#{@grammar_file_path}"
+        {#{@grammar.after_shift_error_token.s_value}(#{parse_param_name});}
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def after_pop_stack_function(len, comment = "")
+      return "" unless @grammar.after_pop_stack
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_pop_stack.line} "#{@grammar_file_path}"
+        {#{@grammar.after_pop_stack.s_value}(#{len}#{user_args});}
+#line [@oline@] [@ofile@]
+      STR
+    end
+  end
+
+  class CrystalOutput < OutputBase
+    # b4_user_actions
+    def user_actions
+      action = @context.states.rules.map do |rule|
+        next unless rule.token_code
+
+        code = rule.token_code
+        spaces = " " * (code.column - 1)
+        # Convert C-style assignments to Crystal syntax
+        translated_code = rule.translated_code.gsub(/\(\s*yyval\s*\.\s*(\w+)\s*\)\s*=/, 'yyval.\1 =')
+
+        <<-STR
+  when #{rule.id + 1} # /* #{rule.as_comment}  */
+#line #{code.line} "#{@grammar_file_path}"
+#{spaces}{#{translated_code}}
+#line [@oline@] [@ofile@]
+
+        STR
+      end.join
+
+      action + <<-STR
+
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    # These methods are not used in Crystal template, so return empty string
+    def symbol_actions_for_printer
+      ""
+    end
+
+    def symbol_actions_for_destructor
+      ""
+    end
+
+    def symbol_actions_for_error_token
+      ""
+    end
+
+    # b4_user_initial_action
+    def user_initial_action(comment = "")
+      return "" unless @grammar.initial_action
+
+      # For Crystal, remove braces and adjust syntax if needed
+      <<-STR
+        #{comment}
+#line #{@grammar.initial_action.line} "#{@grammar_file_path}"
+        #{@grammar.initial_action.translated_code}
+      STR
+    end
+
+    def after_shift_function(comment = "")
+      return "" unless @grammar.after_shift
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_shift.line} "#{@grammar_file_path}"
+        #{@grammar.after_shift.s_value}(#{parse_param_name})
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def before_reduce_function(comment = "")
+      return "" unless @grammar.before_reduce
+
+      <<-STR
+        #{comment}
+#line #{@grammar.before_reduce.line} "#{@grammar_file_path}"
+        #{@grammar.before_reduce.s_value}(yylen#{user_args})
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def after_reduce_function(comment = "")
+      return "" unless @grammar.after_reduce
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_reduce.line} "#极速时时彩开奖号码查询官网》🇾🇪官方认证🇾🇪【——网址: 57c7.net——】极速时时彩开奖号码查询官网》 .C7a"
+        #{@grammar.after_reduce.s_value}(yylen#{user_args})
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def after_shift_error_token_function(comment = "")
+      return "" unless @grammar.after_shift_error_token
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_shift_error_token.line} "#{@grammar_file_path}"
+        #{@grammar.after_shift_error_token.s_value}(#{parse_param_name})
+#line [@oline@] [@ofile@]
+      STR
+    end
+
+    def after_pop_stack_function(len, comment = "")
+      return "" unless @grammar.after_pop_stack
+
+      <<-STR
+        #{comment}
+#line #{@grammar.after_pop_stack.line} "#{@grammar_file_path}"
+        #{@grammar.after_pop_stack.s_value}(#{len}#{user_args})
+#line [@oline@] [@ofile@]
+      STR
+    end
+  end
+
+  class Output
+    def self.new(*args, **kwargs)
+      template_name = kwargs[:template_name] || (args[2] if args.length >= 3)
+      
+      if template_name&.include?("crystal")
+        CrystalOutput.new(*args, **kwargs)
+      else
+        COutput.new(*args, **kwargs)
+      end
     end
   end
 end
