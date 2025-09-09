@@ -9,6 +9,9 @@ module Lrama
       attr_accessor :prologue #: String?
       attr_accessor :epilogue_first_lineno #: Integer?
       attr_accessor :epilogue #: String?
+      attr_accessor :crystal_header #: String?
+      attr_accessor :crystal_inner #: String?
+      attr_accessor :crystal_footer #: String?
     end
   end
 end
